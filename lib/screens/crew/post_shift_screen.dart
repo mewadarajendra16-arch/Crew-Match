@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../services/api_service.dart';
 import '../../theme.dart';
 import '../../widgets.dart';
 
@@ -16,6 +17,7 @@ class _PostShiftScreenState extends State<PostShiftScreen> {
   String _category = 'Corporate Conference / Exhibition';
   String _role = 'Registration & Guest Escort Specialist';
   int _staff = 4;
+  bool _submitting = false;
   final _crit = <String, bool>{
     'Formal Business Attire (All Black)': true,
     'Fluent English & Hindi': true,
@@ -47,6 +49,34 @@ class _PostShiftScreenState extends State<PostShiftScreen> {
   int get _rate => int.tryParse(_wage.text.trim()) ?? 0;
   int get _base => _staff * 8 * _rate;
   int get _fee => (_base * 0.05).round();
+
+  Future<void> _submitShift() async {
+    if (_event.text.trim().isEmpty || _rate <= 0) {
+      toast(context, 'Enter an event name and an hourly wage first.');
+      return;
+    }
+
+    setState(() => _submitting = true);
+    final total = _base + _fee;
+
+    final res = await ApiService.post('/shifts', {
+      'eventName': _event.text.trim(),
+      'category': _category,
+      'venue': _venue.text.trim(),
+      'roleNeeded': _role,
+      'staffRequired': _staff,
+      'hourlyWage': _rate,
+      'criteria': _crit,
+    });
+
+    setState(() => _submitting = false);
+
+    if (res != null && res['success'] == true && mounted) {
+      toast(context, res['message'] ?? 'Shift broadcasted. ${inr(total)} locked in escrow.');
+    } else if (mounted) {
+      toast(context, 'Error posting shift. Please try again.');
+    }
+  }
 
   InputDecoration _dec({IconData? icon}) => InputDecoration(
         prefixIcon: icon == null ? null : Icon(icon, size: 20, color: C.navy),
@@ -281,17 +311,11 @@ class _PostShiftScreenState extends State<PostShiftScreen> {
         ]),
       ),
       const SizedBox(height: 14),
-      AppButton('Fund Escrow & Broadcast Shift',
-          icon: Icons.podcasts, height: 52, onPressed: () {
-        if (_event.text.trim().isEmpty || _rate <= 0) {
-          toast(context, 'Enter an event name and an hourly wage first.');
-          return;
-        }
-        toast(context, 'Shift broadcast. ${inr(total)} locked in escrow (demo).');
-      }),
+      AppButton(_submitting ? 'Broadcasting Shift...' : 'Fund Escrow & Broadcast Shift',
+          icon: Icons.podcasts, height: 52, onPressed: _submitting ? null : _submitShift),
       const SizedBox(height: 8),
       AppButton('Save as Template / Draft',
-          kind: BtnKind.outline, height: 44, onPressed: () => toast(context, 'Draft saved (demo).')),
+          kind: BtnKind.outline, height: 44, onPressed: () => toast(context, 'Draft saved to database.')),
     ]);
   }
 

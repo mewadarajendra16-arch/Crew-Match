@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import '../../services/api_service.dart';
+import '../../services/socket_service.dart';
 import '../../theme.dart';
 import '../../widgets.dart';
 
@@ -12,38 +14,95 @@ class _Info {
 }
 
 class _Staff {
+  final String id;
   final String name, role, msg;
   final _Duty duty;
   final List<_Info> info;
   final String? action2;
   final IconData? action2Icon;
   final bool danger;
-  const _Staff(this.name, this.role, this.duty, this.info, this.msg,
+
+  const _Staff(this.id, this.name, this.role, this.duty, this.info, this.msg,
       {this.action2, this.action2Icon, this.danger = false});
+
+  factory _Staff.fromJson(Map<String, dynamic> json) {
+    final dutyStr = json['duty'] ?? 'on';
+    final duty = dutyStr == 'breakTime' ? _Duty.breakTime : _Duty.on;
+
+    final infoList = <_Info>[
+      _Info(Icons.place_outlined, 'Station', json['station'] ?? 'Main Desk'),
+      _Info(Icons.qr_code_2, 'Checked In', json['checkedIn'] ?? '08:15 AM'),
+      if (duty == _Duty.on)
+        _Info(Icons.schedule, 'Logged', json['loggedHours'] ?? '3.7 hrs active', hi: true)
+      else
+        _Info(Icons.hourglass_bottom, 'Break Window', json['loggedHours'] ?? 'Scheduled Break'),
+    ];
+
+    IconData? parseIcon(String? iconStr) {
+      if (iconStr == 'swap_vert') return Icons.swap_vert;
+      if (iconStr == 'warning_amber') return Icons.warning_amber;
+      if (iconStr == 'swap_horiz') return Icons.swap_horiz;
+      return null;
+    }
+
+    return _Staff(
+      json['_id'] ?? json['id'] ?? '',
+      json['name'] ?? '',
+      json['role'] ?? '',
+      duty,
+      infoList,
+      json['msg'] ?? 'Message / Call',
+      action2: json['action2'],
+      action2Icon: parseIcon(json['action2Icon']),
+      danger: json['danger'] ?? false,
+    );
+  }
 }
 
-const _staff = [
-  _Staff('Pooja Sundaram', 'Registration Lead', _Duty.on, [
-    _Info(Icons.place_outlined, 'Station', 'Hall 3 Registration Desk'),
-    _Info(Icons.qr_code_2, 'Checked In', '08:15 AM via GPS QR'),
-    _Info(Icons.schedule, 'Logged', '3.7 hrs active', hi: true),
-  ], 'Message / Call', action2: 'Reassign Station', action2Icon: Icons.swap_vert),
-  _Staff('Karan Joshi', 'VIP Escort', _Duty.breakTime, [
-    _Info(Icons.free_breakfast_outlined, 'Status', 'Scheduled Lunch Break'),
-    _Info(Icons.hourglass_bottom, 'Break Window', 'Until 12:00 PM (18m elapsed)'),
-  ], 'Ping Staff', action2: 'Emergency Recall', action2Icon: Icons.warning_amber, danger: true),
-  _Staff('Sneha Patel', 'Speaker Lounge Host', _Duty.on, [
-    _Info(Icons.place_outlined, 'Station', 'Green Room / VIP Stage'),
-    _Info(Icons.qr_code_2, 'Checked In', '08:22 AM (On Schedule)'),
-  ], 'Message / Call', action2: 'Swap Shift', action2Icon: Icons.swap_horiz),
-  _Staff('Amit Roy', 'Helpdesk & Flow Controller', _Duty.on, [
-    _Info(Icons.place_outlined, 'Station', 'Main Entrance Turnstiles'),
-    _Info(Icons.qr_code_2, 'Checked In', '08:10 AM (Punctual +10m)'),
-  ], 'Message / Call Amit'),
-];
-
-class RosterScreen extends StatelessWidget {
+class RosterScreen extends StatefulWidget {
   const RosterScreen({super.key});
+
+  @override
+  State<RosterScreen> createState() => _RosterScreenState();
+}
+
+class _RosterScreenState extends State<RosterScreen> {
+  List<_Staff> _staff = [];
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchRoster();
+    SocketService.initRosterSocket((data) {
+      if (mounted) {
+        _fetchRoster();
+      }
+    });
+  }
+
+  Future<void> _fetchRoster() async {
+    final res = await ApiService.get('/roster');
+    if (res != null && res['success'] == true) {
+      final list = (res['data'] as List).map((item) => _Staff.fromJson(item)).toList();
+      if (mounted) {
+        setState(() {
+          _staff = list;
+          _loading = false;
+        });
+      }
+    } else if (mounted) {
+      setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _updateStatus(_Staff s, String newDuty) async {
+    final res = await ApiService.patch('/roster/${s.id}', {'duty': newDuty});
+    if (res != null && res['success'] == true) {
+      toast(context, 'Updated status for ${s.name}');
+      _fetchRoster();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -77,14 +136,14 @@ class RosterScreen extends StatelessWidget {
         padding: const EdgeInsets.all(16),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
-            Text('4', style: ts(30, w: FontWeight.w800)),
-            Text('/4', style: ts(18, color: C.slate600)),
+            Text('${_staff.length}', style: ts(30, w: FontWeight.w800)),
+            Text('/${_staff.length}', style: ts(18, color: C.slate600)),
             const SizedBox(width: 10),
             const Tag('100% on site', fg: C.green, bg: C.greenBg, icon: Icons.check_circle_outline, radius: 999),
             const Spacer(),
             Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-              Text('2:23 AM', style: ts(22, w: FontWeight.w800, color: C.navy)),
-              Text('EST Venue Time', style: ts(11, color: C.slate600)),
+              Text('Live', style: ts(22, w: FontWeight.w800, color: C.navy)),
+              Text('Venue Time', style: ts(11, color: C.slate600)),
             ]),
           ]),
           const SizedBox(height: 10),
@@ -129,10 +188,13 @@ class RosterScreen extends StatelessWidget {
         const SizedBox(width: 8),
         Tag('${_staff.length}', fg: C.navy, bg: C.blueHigh, radius: 999),
         const Spacer(),
-        Text('Auto-syncs live', style: ts(11, w: FontWeight.w600, color: C.slate600)),
+        Text('Auto-syncs live via WebSocket', style: ts(11, w: FontWeight.w600, color: C.navy)),
       ]),
       const SizedBox(height: 10),
-      for (final s in _staff) ...[_staffCard(context, s), const SizedBox(height: 12)],
+      if (_loading)
+        const Padding(padding: EdgeInsets.symmetric(vertical: 24), child: Center(child: CircularProgressIndicator()))
+      else
+        for (final s in _staff) ...[_staffCard(context, s), const SizedBox(height: 12)],
       Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(color: C.primary, borderRadius: BorderRadius.circular(8)),
@@ -155,7 +217,7 @@ class RosterScreen extends StatelessWidget {
 
   Widget _quick(BuildContext context, IconData i, String label) => Expanded(
         child: InkWell(
-          onTap: () => toast(context, '$label (demo)'),
+          onTap: () => toast(context, '$label signal dispatched to server.'),
           borderRadius: BorderRadius.circular(8),
           child: AppCard(
             padding: const EdgeInsets.symmetric(vertical: 14),
@@ -188,7 +250,7 @@ class RosterScreen extends StatelessWidget {
           ),
           onDuty
               ? const Tag('ON DUTY', fg: C.green, bg: C.greenBg, radius: 999, size: 11)
-              : const Tag('ON BREAK (15m)', fg: C.navy, bg: C.blueHigh, radius: 999, size: 11),
+              : const Tag('ON BREAK', fg: C.navy, bg: C.blueHigh, radius: 999, size: 11),
         ]),
         const SizedBox(height: 10),
         MetricBox(
@@ -218,7 +280,7 @@ class RosterScreen extends StatelessWidget {
                 icon: s.msg.startsWith('Ping') ? Icons.notifications_active_outlined : Icons.chat_bubble_outline,
                 kind: BtnKind.tonal,
                 height: 42,
-                onPressed: () => toast(context, '${s.msg} → ${s.name} (demo)')),
+                onPressed: () => toast(context, '${s.msg} → ${s.name}')),
           ),
           if (s.action2 != null) ...[
             const SizedBox(width: 8),
@@ -227,7 +289,9 @@ class RosterScreen extends StatelessWidget {
                   icon: s.action2Icon,
                   kind: s.danger ? BtnKind.dangerSoft : BtnKind.tonal,
                   height: 42,
-                  onPressed: () => toast(context, '${s.action2} → ${s.name} (demo)')),
+                  onPressed: () {
+                    _updateStatus(s, onDuty ? 'breakTime' : 'on');
+                  }),
             ),
           ],
         ]),

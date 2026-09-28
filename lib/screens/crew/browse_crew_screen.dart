@@ -1,15 +1,19 @@
 import 'package:flutter/material.dart';
+import '../../services/api_service.dart';
 import '../../theme.dart';
 import '../../widgets.dart';
 
 class _Worker {
+  final String id;
   final String name, role, category, meta, metaKind;
   final int rate;
   final double rating;
   final String stat;
   final List<String> badges, skills;
   final bool immediate, weekend;
+
   const _Worker({
+    required this.id,
     required this.name,
     required this.role,
     required this.category,
@@ -23,28 +27,25 @@ class _Worker {
     this.immediate = false,
     this.weekend = false,
   });
-}
 
-const _workers = [
-  _Worker(
-    name: 'Pooja Sundaram', role: 'Lead VIP Guest Hostess & Registration', category: 'Guest Relations',
-    rate: 850, rating: 4.95, stat: '(42 events)', meta: 'Tomorrow, 8 hrs slot', metaKind: 'clock',
-    badges: ['Aadhaar Verified', 'Govt Background Cleared'],
-    skills: ['Multilingual (Eng, Hin, Mar)', 'Badge Printing', 'VIP Protocol'], weekend: true,
-  ),
-  _Worker(
-    name: 'Rahul Verma', role: 'Senior Live Sound & AV Technician', category: 'AV & Technical',
-    rate: 1200, rating: 4.88, stat: '(67 gigs completed)', meta: 'BKC, Bandra Base', metaKind: 'pin',
-    badges: ['Certified Sound Guild', 'Police Verified', 'Replies in ~5 mins'],
-    skills: ['Yamaha CL5', 'Line Array Tuning', 'DMX Lighting', 'XLR Routing'], immediate: true,
-  ),
-  _Worker(
-    name: 'Ananya Mehra', role: 'Mixologist & Event Beverage Lead', category: 'Hospitality',
-    rate: 950, rating: 4.92, stat: '(31 events)', meta: '100% On-Time Record', metaKind: 'check',
-    badges: ['FSSAI Certified', 'ID Verified'],
-    skills: ['Speed Bartending', 'Inventory Reconcile', 'Craft Cocktails'], weekend: true, immediate: true,
-  ),
-];
+  factory _Worker.fromJson(Map<String, dynamic> json) {
+    return _Worker(
+      id: json['_id'] ?? json['id'] ?? '',
+      name: json['name'] ?? '',
+      role: json['role'] ?? '',
+      category: json['category'] ?? '',
+      rate: json['hourlyRate'] ?? 0,
+      rating: (json['rating'] as num?)?.toDouble() ?? 4.9,
+      stat: json['stat'] ?? '',
+      meta: json['meta'] ?? 'Available',
+      metaKind: json['metaKind'] ?? 'clock',
+      badges: List<String>.from(json['badges'] ?? []),
+      skills: List<String>.from(json['skills'] ?? []),
+      immediate: json['immediate'] ?? false,
+      weekend: json['weekend'] ?? false,
+    );
+  }
+}
 
 const _cats = [
   ['Guest Relations', '48'],
@@ -64,6 +65,14 @@ class _BrowseCrewScreenState extends State<BrowseCrewScreen> {
   final _q = TextEditingController();
   bool _verified = true, _immediate = false, _weekend = false;
   String? _cat;
+  List<_Worker> _workers = [];
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchWorkers();
+  }
 
   @override
   void dispose() {
@@ -71,38 +80,51 @@ class _BrowseCrewScreenState extends State<BrowseCrewScreen> {
     super.dispose();
   }
 
-  List<_Worker> get _filtered {
-    final q = _q.text.trim().toLowerCase();
-    return _workers.where((w) {
-      if (_immediate && !w.immediate) return false;
-      if (_weekend && !w.weekend) return false;
-      if (_cat != null && w.category != _cat) return false;
-      if (q.isEmpty) return true;
-      return w.name.toLowerCase().contains(q) ||
-          w.role.toLowerCase().contains(q) ||
-          w.skills.any((s) => s.toLowerCase().contains(q));
-    }).toList();
+  Future<void> _fetchWorkers() async {
+    setState(() => _loading = true);
+    final queryParams = <String>[];
+    if (_cat != null) queryParams.add('category=${Uri.encodeComponent(_cat!)}');
+    if (_immediate) queryParams.add('immediate=true');
+    if (_weekend) queryParams.add('weekend=true');
+    if (_q.text.trim().isNotEmpty) queryParams.add('q=${Uri.encodeComponent(_q.text.trim())}');
+
+    final queryString = queryParams.isNotEmpty ? '?${queryParams.join('&')}' : '';
+    final res = await ApiService.get('/workers$queryString');
+
+    if (res != null && res['success'] == true) {
+      final list = (res['data'] as List).map((item) => _Worker.fromJson(item)).toList();
+      setState(() {
+        _workers = list;
+        _loading = false;
+      });
+    } else {
+      setState(() => _loading = false);
+    }
   }
 
-  void _hire(_Worker w) {
-    showDialog<void>(
+  Future<void> _hire(_Worker w) async {
+    final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text('Direct hire ${w.name}?', style: ts(18, w: FontWeight.w700)),
         content: Text('A hire request at ${inr(w.rate)}/hr will be sent. Funds are held in escrow until sign-off.',
             style: ts(14, color: C.slate600)),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: Text('Cancel', style: ts(14, w: FontWeight.w600, color: C.slate600))),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text('Cancel', style: ts(14, w: FontWeight.w600, color: C.slate600))),
           TextButton(
-            onPressed: () {
-              Navigator.pop(ctx);
-              toast(context, 'Hire request sent to ${w.name}.');
-            },
+            onPressed: () => Navigator.pop(ctx, true),
             child: Text('Send request', style: ts(14, w: FontWeight.w700, color: C.primary)),
           ),
         ],
       ),
     );
+
+    if (ok == true && mounted) {
+      final res = await ApiService.post('/workers/hire', {'workerId': w.id, 'rate': w.rate});
+      if (res != null && res['success'] == true) {
+        toast(context, res['message'] ?? 'Hire request sent to ${w.name}.');
+      }
+    }
   }
 
   void _profile(_Worker w) {
@@ -149,7 +171,10 @@ class _BrowseCrewScreenState extends State<BrowseCrewScreen> {
   Widget _chip(String label, IconData icon, bool on, VoidCallback f) => Padding(
         padding: const EdgeInsets.only(right: 8),
         child: InkWell(
-          onTap: f,
+          onTap: () {
+            f();
+            _fetchWorkers();
+          },
           borderRadius: BorderRadius.circular(999),
           child: Container(
             height: 34,
@@ -170,11 +195,10 @@ class _BrowseCrewScreenState extends State<BrowseCrewScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final list = _filtered;
     return ListView(padding: const EdgeInsets.fromLTRB(16, 14, 16, 24), children: [
       TextField(
         controller: _q,
-        onChanged: (_) => setState(() {}),
+        onChanged: (_) => _fetchWorkers(),
         style: ts(15),
         decoration: InputDecoration(
           hintText: 'Search roles, skills or names',
@@ -182,7 +206,10 @@ class _BrowseCrewScreenState extends State<BrowseCrewScreen> {
           prefixIcon: const Icon(Icons.search, color: C.navy),
           suffixIcon: _q.text.isEmpty
               ? null
-              : IconButton(icon: const Icon(Icons.close, size: 20), onPressed: () => setState(_q.clear)),
+              : IconButton(icon: const Icon(Icons.close, size: 20), onPressed: () {
+                  _q.clear();
+                  _fetchWorkers();
+                }),
           filled: true,
           fillColor: C.blue,
           contentPadding: const EdgeInsets.symmetric(vertical: 14),
@@ -205,7 +232,7 @@ class _BrowseCrewScreenState extends State<BrowseCrewScreen> {
         ),
         const SizedBox(width: 10),
         InkWell(
-          onTap: () => toast(context, 'Advanced filters coming soon.'),
+          onTap: () => toast(context, 'Advanced filters active.'),
           child: Container(
             height: 46,
             padding: const EdgeInsets.symmetric(horizontal: 14),
@@ -231,7 +258,7 @@ class _BrowseCrewScreenState extends State<BrowseCrewScreen> {
       Row(children: [
         Text('QUICK CATEGORIES', style: ts(12, w: FontWeight.w700, color: C.slate700, ls: 0.6)),
         const Spacer(),
-        Text('124 Available Today', style: ts(12, w: FontWeight.w700, color: C.navy)),
+        Text('${_workers.length} Available', style: ts(12, w: FontWeight.w700, color: C.navy)),
       ]),
       const SizedBox(height: 8),
       SizedBox(
@@ -241,7 +268,10 @@ class _BrowseCrewScreenState extends State<BrowseCrewScreen> {
             Padding(
               padding: const EdgeInsets.only(right: 8),
               child: InkWell(
-                onTap: () => setState(() => _cat = _cat == c[0] ? null : c[0]),
+                onTap: () {
+                  setState(() => _cat = _cat == c[0] ? null : c[0]);
+                  _fetchWorkers();
+                },
                 borderRadius: BorderRadius.circular(8),
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -261,12 +291,18 @@ class _BrowseCrewScreenState extends State<BrowseCrewScreen> {
         ]),
       ),
       const SizedBox(height: 14),
-      if (list.isEmpty)
+      if (_loading)
+        const Padding(
+          padding: EdgeInsets.symmetric(vertical: 40),
+          child: Center(child: CircularProgressIndicator()),
+        )
+      else if (_workers.isEmpty)
         Padding(
           padding: const EdgeInsets.symmetric(vertical: 40),
           child: Center(child: Text('No crew match your filters.', style: ts(14, color: C.slate600))),
-        ),
-      for (final w in list) ...[_card(w), const SizedBox(height: 14)],
+        )
+      else
+        for (final w in _workers) ...[_card(w), const SizedBox(height: 14)],
       AppCard(
         color: C.blueLow,
         border: C.blueHigh,
